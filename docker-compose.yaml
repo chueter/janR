@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  # The Mosquitto MQTT broker for message queuing
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: mosquitto
+    restart: on-failure
+    ports:
+      - "1883:1883" # Standard MQTT port
+      - "9001:9001" # Websockets port
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  # The PostgreSQL database for data storage
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    environment:
+      - POSTGRES_DB=sensor_data
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # The Python application for data ingestion and analysis
+  ingest_analytics:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    container_name: ingest_analytics
+    restart: on-failure
+    depends_on:
+      - mosquitto
+      - postgres
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=sensor_data
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    # Add a volume mount to persist the critical data file
+    volumes:
+      - ./data:/app/data
+
+  # The new service to simulate a continuous sensor
+  simulate_sensor:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulate
+    container_name: simulate_sensor
+    restart: on-failure
+    depends_on:
+      - mosquitto
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+    volumes:
+      - ./tempExample.csv:/app/tempExample.csv
+
+volumes:
+  postgres_data:
