@@ -4,6 +4,7 @@ import os
 import json
 import csv
 from time import sleep
+from opensearchpy import OpenSearch, ConnectionError, NotFoundError
 
 # --- Database Setup ---
 DB_HOST = os.environ.get("POSTGRES_HOST", "localhost")
@@ -23,7 +24,7 @@ def connect_to_db():
                 password=DB_PASS,
                 port=DB_PORT
             )
-            print("Successfully connected to the database.")
+            print("Successfully connected to the PostgreSQL database.")
             # Create the table if it doesn't exist
             with conn.cursor() as cur:
                 cur.execute("""
@@ -39,15 +40,53 @@ def connect_to_db():
             print("Database connection failed. Retrying in 5 seconds...")
             sleep(5)
 
+# --- OpenSearch Setup ---
+OS_HOST = os.environ.get("OPENSEARCH_HOST", "localhost")
+OS_PORT = int(os.environ.get("OPENSEARCH_PORT", "9200"))
+OS_AUTH = (os.environ.get("OPENSEARCH_USER", "admin"), os.environ.get("OPENSEARCH_PASSWORD", "admin"))
+OS_INDEX = "jans_machine_temp_test"
+
+def connect_to_opensearch():
+    """Establishes a connection to the OpenSearch instance."""
+    while True:
+        try:
+            client = OpenSearch(
+                hosts=[{'host': OS_HOST, 'port': OS_PORT}],
+                http_auth=OS_AUTH,
+                use_ssl=True,
+                verify_certs=False,
+                ssl_assert_hostname=False,
+                ssl_show_warn=False
+            )
+            print("Successfully connected to OpenSearch.")
+
+            # Create the index if it doesn't exist
+            if not client.indices.exists(index=OS_INDEX):
+                print(f"Index '{OS_INDEX}' not found. Creating it...")
+                client.indices.create(
+                    index=OS_INDEX,
+                    body={
+                        "settings": {
+                            "index": {
+                                "number_of_shards": 1,
+                                "number_of_replicas": 0
+                            }
+                        }
+                    }
+                )
+            
+            return client
+        except ConnectionError:
+            print("OpenSearch connection failed. Retrying in 5 seconds...")
+            sleep(5)
+
 def write_to_critical_file(data):
     """Appends a new row to the critical_hardware.csv file."""
-    # The 'data' directory is mounted from the host to ensure persistence.
     file_path = "/app/data/critical_hardware.csv"
     file_exists = os.path.isfile(file_path)
 
     with open(file_path, 'a', newline='') as f:
         writer = csv.writer(f)
-        # Write the header row only if the file is new
         if not file_exists:
             writer.writerow(['timestamp', 'id', 'temperature'])
         writer.writerow([data['timestamp'], data['id'], data['temperature']])
@@ -64,48 +103,51 @@ def on_connect(client, userdata, flags, rc):
         client.subscribe(TOPIC)
     else:
         print(f"Failed to connect to MQTT Broker, return code {rc}")
-        exit(1) # Exit to trigger a container restart
+        exit(1)
 
 def on_message(client, userdata, msg):
     """Callback function for when a message is received from the broker."""
-    db_conn = userdata
+    db_conn, os_client = userdata
     try:
-        # Parse the JSON payload
         payload = json.loads(msg.payload.decode('utf-8'))
         sensor_id = payload['id']
         timestamp = payload['timestamp']
         temperature = payload['temperature']
 
         # --- Threshold Detection ---
-        THRESHOLD = 25
+        THRESHOLD = 100
         if temperature > THRESHOLD:
             print(f"ALERT! Temperature for {sensor_id} is above threshold: {temperature}°C")
-            # Write the critical data point to the file
             write_to_critical_file(payload)
 
-        # --- Data Ingestion ---
+        # --- Data Ingestion to PostgreSQL ---
         with db_conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO sensor_readings (id, timestamp, temperature) VALUES (%s, %s, %s)",
                 (sensor_id, timestamp, temperature)
             )
         db_conn.commit()
-        print(f"Ingested data for {sensor_id}: {temperature}°C at {timestamp}")
+        print(f"Ingested to PostgreSQL: {sensor_id} - {temperature}°C")
+
+        # --- Data Ingestion to OpenSearch ---
+        os_client.index(index=OS_INDEX, body=payload)
+        print(f"Ingested to OpenSearch: {sensor_id} - {temperature}°C")
 
     except (json.JSONDecodeError, KeyError) as e:
         print(f"Error parsing message: {e}")
     except psycopg2.Error as e:
         print(f"Database error: {e}. Attempting to reconnect...")
-        db_conn = connect_to_db() # Reconnect on a database error
-        client.user_data_set(db_conn) # Update user data with new connection
+        db_conn = connect_to_db()
+        client.user_data_set((db_conn, os_client))
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
 # --- Main Logic ---
 if __name__ == "__main__":
     db_conn = connect_to_db()
+    os_client = connect_to_opensearch()
     
-    mqtt_client = mqtt.Client(userdata=db_conn)
+    mqtt_client = mqtt.Client(userdata=(db_conn, os_client))
     mqtt_client.on_connect = on_connect
     mqtt_client.on_message = on_message
 
@@ -114,4 +156,4 @@ if __name__ == "__main__":
         mqtt_client.loop_forever()
     except Exception as e:
         print(f"Connection to MQTT broker failed: {e}")
-        exit(1) # Exit to trigger a container restart
+        exit(1)

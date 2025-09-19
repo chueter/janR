@@ -7,8 +7,8 @@ services:
     container_name: mosquitto
     restart: on-failure
     ports:
-      - "1883:1883" # Standard MQTT port
-      - "9001:9001" # Websockets port
+      - "1883:1883"
+      - "9001:9001"
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
 
@@ -25,6 +25,42 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  # The OpenSearch instance for search and analytics
+  opensearch:
+    image: opensearchproject/opensearch:1.2.0
+    container_name: opensearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - OPENSEARCH_USER=admin
+      - OPENSEARCH_PASSWORD=admin
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    ports:
+      - "9200:9200" # OpenSearch HTTP port
+      - "9600:9600" # Transport port
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200 || exit 1"]
+      interval: 1m30s
+      timeout: 10s
+      retries: 3
+
+  # The Kibana dashboard for visualization
+  kibana:
+    image: opensearchproject/opensearch-dashboards:1.2.0
+    container_name: kibana
+    environment:
+      - OPENSEARCH_HOSTS=http://opensearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      - opensearch
+
   # The Python application for data ingestion and analysis
   ingest_analytics:
     build:
@@ -35,17 +71,21 @@ services:
     depends_on:
       - mosquitto
       - postgres
+      - opensearch
     environment:
       - MQTT_BROKER_HOST=mosquitto
       - POSTGRES_HOST=postgres
       - POSTGRES_DB=sensor_data
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
-    # Add a volume mount to persist the critical data file
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - OPENSEARCH_USER=admin
+      - OPENSEARCH_PASSWORD=admin
     volumes:
       - ./data:/app/data
 
-  # The new service to simulate a continuous sensor
+  # The service to simulate a continuous sensor
   simulate_sensor:
     build:
       context: .
@@ -61,3 +101,4 @@ services:
 
 volumes:
   postgres_data:
+  opensearch_data:
