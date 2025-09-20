@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS sensor_readings (
+id VARCHAR(50) NOT NULL,
+timestamp TIMESTAMPTZ NOT NULL,
+temperature REAL NOT NULL
+);
