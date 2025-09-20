@@ -1,9 +1,58 @@
-version: '3.8'
-
 services:
-  # The central MQTT broker for message routing
+  data_ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    container_name: data_ingest
+    restart: on-failure
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=machine_x
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_USER=admin
+      - OPENSEARCH_PASSWORD=admin
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      #opensearch:
+        #condition: service_healthy
+
+  opensearch_prepare:
+    container_name: opensearch_prepare
+    build:
+      context: .
+      dockerfile: Dockerfile.prepare
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+    - OPENSEARCH_HOST=opensearch
+    - OPENSEARCH_USER=admin
+    - OPENSEARCH_PASSWORD=admin
+    # This service is for a one-off task, so we don't need it to restart unless it fails
+    restart: "on-failure"
+
+  data_gen:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulate
+    container_name: data_gen
+    restart: on-failure
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
   mosquitto:
-    image: eclipse-mosquitto:2.0.22
+    image: eclipse-mosquitto:2.0.15
     container_name: mosquitto
     ports:
       - "1883:1883"
@@ -11,42 +60,39 @@ services:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
-    networks:
-      - iot-network
     healthcheck:
-      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-p", "1883", "-t", "test/health", "-m", "health check"]
+      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-t", "test/topic", "-m", "healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
 
-  # The database for structured, long-term storage of sensor data
   postgres:
-    image: postgres:15
+    image: postgres:13
     container_name: postgres
-    environment:
-      - POSTGRES_DB=machine_x
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-    volumes:
-      - ./postgres-data:/var/lib/postgresql/data
-    networks:
-      - iot-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d $POSTGRES_DB -U $POSTGRES_USER"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     ports:
       - "5432:5432"
-
-  # The search and analytics engine for real-time dashboards and visualization
-  opensearch:
-    image: opensearchproject/opensearch:2.11.1
-    container_name: opensearch
     environment:
+      POSTGRES_DB: machine_x
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  opensearch:
+    image: opensearchproject/opensearch:2.10.0
+    container_name: opensearch
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    environment:
+      - plugins.security.disabled=true
       - discovery.type=single-node
-      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=true
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=admin
       - OPENSEARCH_INITIAL_ADMIN_USERNAME=admin
     ulimits:
@@ -54,107 +100,27 @@ services:
         soft: -1
         hard: -1
     volumes:
-      - ./opensearch-data:/usr/share/opensearch/data
-    ports:
-      - "9200:9200"
-      - "9600:9600" # required for performance analyzer
-    networks:
-      - iot-network
+      - opensearch-data:/usr/share/opensearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sS -k https://localhost:9200/_cluster/health | grep '\"status\":\"green\"' || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      test: ["CMD-SHELL", "curl -f --silent --show-error --head http://localhost:9200/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # A one-off service to set up the OpenSearch index template before ingestion begins
-  opensearch_setup:
-    build:
-      context: .
-      dockerfile: Dockerfile.prepare
-    container_name: opensearch_setup
-    environment:
-      - OPENSEARCH_HOST=opensearch
-      - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=admin
-    networks:
-      - iot-network
-    depends_on:
-      opensearch:
-        condition: service_healthy
-    restart: "no" # This is a one-time setup job
-
-  # The Python service that listens for data and ingests it into Postgres
-  data_ingest:
-    build:
-      context: .
-      dockerfile: Dockerfile.ingest
-    container_name: data_ingest
-    environment:
-      - MQTT_BROKER_HOST=mosquitto
-      - POSTGRES_HOST=postgres
-      - POSTGRES_DB=machine_x
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    networks:
-      - iot-network
-
-  # The service that ingests data from Postgres to OpenSearch
-  sql2os:
-    build:
-      context: .
-      dockerfile: Dockerfile.sql2os
-    container_name: sql2os
-    environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_DB=machine_x
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - OPENSEARCH_HOST=opensearch
-      - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=admin
-    depends_on:
-      postgres:
-        condition: service_healthy
-      opensearch:
-        condition: service_healthy
-      opensearch_setup:
-        condition: service_completed_successfully
-    networks:
-      - iot-network
-
-  # The service that simulates sensor data and publishes it to the MQTT broker
-  simulate_sensor:
-    build:
-      context: .
-      dockerfile: Dockerfile.simulate
-    container_name: simulate_sensor
-    depends_on:
-      - mosquitto
-    networks:
-      - iot-network
-
-  # The visualization tool for creating dashboards from OpenSearch data
   kibana:
-    image: opensearchproject/opensearch-dashboards:2.11.1
+    image: opensearchproject/opensearch-dashboards:2.10.0
     container_name: kibana
     ports:
       - "5601:5601"
     environment:
-      - OPENSEARCH_HOSTS=http://opensearch:9200
+      - OPENSEARCH_HOSTS=https://opensearch:9200
       - OPENSEARCH_USERNAME=admin
       - OPENSEARCH_PASSWORD=admin
+      - server.name=kibana
     depends_on:
       opensearch:
         condition: service_healthy
-    networks:
-      - iot-network
 
-networks:
-  iot-network:
-    driver: bridge
+volumes:
+  postgres-data:
+  opensearch-data:

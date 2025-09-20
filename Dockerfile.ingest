@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Run the Python script when the container launches
-CMD ["python", "ingest_moquitto2sql.py"]
+CMD ["python", "ingest_mosquitto2sql.py"]
