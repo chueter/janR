@@ -34,8 +34,10 @@ services:
         condition: service_healthy
     environment:
     - OPENSEARCH_HOST=opensearch
-    - OPENSEARCH_USER=admin
-    - OPENSEARCH_PASSWORD=admin
+    - OPENSEARCH_PORT=9200
+    - OPENSEARCH_USE_SSL=FALSE
+    #- OPENSEARCH_USER=admin
+    #- OPENSEARCH_PASSWORD=admin
     # This service is for a one-off task, so we don't need it to restart unless it fails
     restart: "on-failure"
 
@@ -93,8 +95,8 @@ services:
       - plugins.security.disabled=true
       - discovery.type=single-node
       - bootstrap.memory_lock=true
-      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=admin
-      - OPENSEARCH_INITIAL_ADMIN_USERNAME=admin
+      #- OPENSEARCH_INITIAL_ADMIN_PASSWORD=admin
+      #- OPENSEARCH_INITIAL_ADMIN_USERNAME=admin
     ulimits:
       memlock:
         soft: -1
@@ -103,7 +105,7 @@ services:
       - opensearch-data:/usr/share/opensearch/data
     healthcheck:
       test: ["CMD-SHELL", "curl -f --silent --show-error --head http://localhost:9200/ || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
 
@@ -113,9 +115,10 @@ services:
     ports:
       - "5601:5601"
     environment:
-      - OPENSEARCH_HOSTS=https://opensearch:9200
-      - OPENSEARCH_USERNAME=admin
-      - OPENSEARCH_PASSWORD=admin
+      - OPENSEARCH_HOSTS=http://opensearch:9200
+      - plugins.security.enabled=false
+      #- OPENSEARCH_USERNAME=admin
+      #- OPENSEARCH_PASSWORD=admin
       - server.name=kibana
     depends_on:
       opensearch:

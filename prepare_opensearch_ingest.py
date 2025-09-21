@@ -5,22 +5,30 @@ from opensearchpy import OpenSearch, ConnectionError
 # --- OpenSearch Setup ---
 OS_HOST = os.environ.get("OPENSEARCH_HOST", "opensearch")
 OS_PORT = int(os.environ.get("OPENSEARCH_PORT", "9200"))
-OS_AUTH = (os.environ.get("OPENSEARCH_USER", "admin"), os.environ.get("OPENSEARCH_PASSWORD", "admin"))
+OS_USER = os.environ.get("OPENSEARCH_USER")
+OS_PASSWORD = os.environ.get("OPENSEARCH_PASSWORD")
+OS_USE_SSL = os.environ.get("OPENSEARCH_USE_SSL", "false").lower() == "true"
+
 OS_INDEX_TEMPLATE_NAME = "machine_x_iot_template"
 
 def connect_to_opensearch():
     """Establishes a connection to the OpenSearch instance."""
-    print("Attempting to connect to OpenSearch...")
+    print(f"Attempting to connect to OpenSearch at {OS_HOST}:{OS_PORT} (SSL={OS_USE_SSL})...")
+
     while True:
         try:
-            client = OpenSearch(
-                hosts=[{'host': OS_HOST, 'port': OS_PORT}],
-                http_auth=OS_AUTH,
-                use_ssl=True,
-                verify_certs=False,
-                ssl_assert_hostname=False,
-                ssl_show_warn=False
-            )
+            client_args = {
+                "hosts": [{"host": OS_HOST, "port": OS_PORT}],
+                "use_ssl": OS_USE_SSL,
+                "verify_certs": OS_USE_SSL,
+                "ssl_show_warn": False
+            }
+
+            if OS_USER and OS_PASSWORD:
+                client_args["http_auth"] = (OS_USER, OS_PASSWORD)
+
+            client = OpenSearch(**client_args)
+
             # A simple call to ensure the connection is active
             client.info()
             print("Successfully connected to OpenSearch.")
