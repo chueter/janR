@@ -1,0 +1,7 @@
+all_access:
+  users:
+    - "admin"
+
+read_only:
+  users:
+    - "user"

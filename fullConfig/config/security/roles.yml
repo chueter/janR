@@ -1,0 +1,18 @@
+all_access:
+  cluster_permissions:
+    - "cluster_all"
+  index_permissions:
+    - index_patterns:
+        - "*"
+      allowed_actions:
+        - "crud"
+        - "read"
+
+read_only:
+  cluster_permissions:
+    - "cluster_composite_ops_ro"
+  index_permissions:
+    - index_patterns:
+        - "*"
+      allowed_actions:
+        - "read"

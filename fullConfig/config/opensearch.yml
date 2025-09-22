@@ -1,0 +1,16 @@
+cluster.name: opensearch-cluster
+node.name: opensearch-node
+path.data: /usr/share/opensearch/data
+path.logs: /usr/share/opensearch/logs
+
+plugins.security.disabled: false
+
+plugins.security.ssl.transport.enabled: true
+plugins.security.ssl.transport.pemcert_filepath: config/kirk.pem
+plugins.security.ssl.transport.pemkey_filepath: config/kirk-key.pem
+plugins.security.ssl.transport.pemtrustedcas_filepath: config/root-ca.pem
+
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: config/kirk.pem
+plugins.security.ssl.http.pemkey_filepath: config/kirk-key.pem
+plugins.security.ssl.http.pemtrustedcas_filepath: config/root-ca.pem

@@ -1,0 +1,10 @@
+admin:
+  hash: "$2a$12$6KXzYh..wLx0P9x7e1hv8OkFZnq3Z2I/sr9bZkx1J0F3FvRZkY0zO"  # Passwort: admin
+  roles:
+    - admin
+    - all_access
+
+user:
+  hash: "$2a$12$wM0H5lR8Jf9u1T/ZjYp0Ge5RV2pHksQ1cG3nCw4hJZwT1wS.F2QeW"  # Passwort: user
+  roles:
+    - read_only

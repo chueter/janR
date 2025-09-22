@@ -1,0 +1,156 @@
+services:
+  data_ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    container_name: data_ingest
+    restart: on-failure
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=machine_x
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_USER=admin
+      - OPENSEARCH_PASSWORD=admin
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      #opensearch:
+        #condition: service_healthy
+
+  opensearch_prepare:
+    container_name: opensearch_prepare
+    build:
+      context: .
+      dockerfile: Dockerfile.prepare
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+    - OPENSEARCH_HOST=opensearch
+    - OPENSEARCH_PORT=9200
+    - OPENSEARCH_USE_SSL=FALSE
+    #- OPENSEARCH_USER=admin
+    #- OPENSEARCH_PASSWORD=admin
+    # This service is for a one-off task, so we don't need it to restart unless it fails
+    restart: "on-failure"
+
+  data_gen:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulate
+    container_name: data_gen
+    restart: on-failure
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0.15
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    healthcheck:
+      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-t", "test/topic", "-m", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: machine_x
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  opensearch:
+    image: opensearchproject/opensearch:2.10.0
+    container_name: opensearch
+    environment:
+      - cluster.name=opensearch-cluster
+      - node.name=opensearch-node
+      - bootstrap.memory_lock=true # along with the memlock settings below, disables swapping
+      - "OPENSEARCH_JAVA_OPTS=-Xms1024m -Xmx1024m" # minimum and maximum Java heap size, recommend setting both to 50% of system RAM
+      - "DISABLE_INSTALL_DEMO_CONFIG=true"
+      - "DISABLE_SECURITY_PLUGIN=true"
+      - "discovery.type=single-node"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536 # maximum number of open files for the OpenSearch user, set to at least 65536 on modern systems
+        hard: 65536
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    ports:
+      - 9200:9200
+      - 9600:9600 # required for Performance Analyzer
+    #networks:
+      #- opensearch-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f --silent --show-error --head https://localhost:9200/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  set_rights_os:
+    image: opensearchproject/opensearch:2.10.0
+    container_name: set_rights_os
+    volumes:
+      - ./security_config:/usr/share/opensearch/security_config
+    command: >
+      bash -c '
+        echo "Waiting for opensearch to be ready..."
+        until curl -f -s https://opensearch:9200; do
+          sleep 5
+        done
+        echo "opensearch is ready. Pushing security configuration."
+        /usr/share/opensearch/plugins/opensearch-security/tools/securityadmin.sh -cd /usr/share/opensearch/security_config -nhnv -cacert /usr/share/opensearch/config/root-ca.pem -cert /usr/share/opensearch/config/kirk.pem -key /usr/share/opensearch/config/kirk-key.pem
+        echo "Security configuration pushed."
+      '
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+  kibana:
+    image: opensearchproject/opensearch-dashboards:2.10.0
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    expose:
+      - "5601"
+    environment:
+      - 'OPENSEARCH_HOSTS=["http://opensearch-node:9200"]'
+      - "DISABLE_SECURITY_DASHBOARDS_PLUGIN=true"
+    depends_on:
+      - opensearch
+        #condition: service_healthy
+      #set_rights_os:
+        #condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  opensearch-data:
